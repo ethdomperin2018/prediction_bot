@@ -1,0 +1,15 @@
+{
+  "name": "prediction-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node run-bot.js",
+    "bot": "node run-bot.js",
+    "update-mlb": "node update-mlb.js",
+    "generate-predictions": "node generate-predictions.js"
+  },
+  "dependencies": {
+    "playwright": "^1.52.0"
+  }
+}
