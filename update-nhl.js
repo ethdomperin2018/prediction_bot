@@ -4,13 +4,13 @@ import { runStandardLeagueUpdate } from './lib/database-update.js';
 
 loadEnvFile();
 
-export function runUpdateMlb(options = {}) {
-  return runStandardLeagueUpdate('mlb', options);
+export function runUpdateNhl(options = {}) {
+  return runStandardLeagueUpdate('nhl', options);
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isDirectRun) {
-  runUpdateMlb().catch((err) => {
+  runUpdateNhl().catch((err) => {
     console.error(err);
     process.exit(1);
   });

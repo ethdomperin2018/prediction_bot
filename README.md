@@ -1,6 +1,6 @@
-# MLB Prediction Bot
+# Prediction Bot (MLB, NBA, NHL, NFL)
 
-Automates daily MLB database updates and prediction generation on Lines.com WordPress.
+Automates daily database updates and prediction generation on Lines.com WordPress.
 
 ## Setup
 
@@ -17,16 +17,34 @@ cp .env.example .env
 npm start
 ```
 
-Runs:
-1. Database update (stadiums, standings, teamseason, games, playerseason → gameinfo → boxscore)
-2. Generate predictions for today's games (Pacific time)
+Full daily order:
+1. **MLB** database update → MLB generate predictions
+2. **NBA** database update → NBA generate predictions
+3. **NHL** database update → NHL generate predictions
+4. **NFL** database update (one endpoint at a time) → NFL generate predictions
+
+### MLB, NBA, and NHL update batches
+- stadiums, standings, players, teamseason, games, playerseason
+- gameinfo
+- boxscore
+
+### NFL update (one-by-one)
+stadiums → standings → players → teamseason → timeframe → schedule → score → playerseason → bye → injury → rookies → gameinfo → boxscorev3
 
 ## Scripts
 
 - `npm start` — full pipeline
-- `npm run update-mlb` — database update only
-- `npm run generate-predictions` — predictions only
+- `npm run update-mlb` / `update-nba` / `update-nhl` / `update-nfl`
+- `npm run generate-predictions` — predictions only (default MLB; set `LEAGUE=NBA`)
+
+## Env flags
+
+- `TARGET_DATE=YYYY-MM-DD` — override prediction day (default: Pacific today)
+- `SKIP_UPDATE=1` — skip DB updates
+- `SKIP_PREDICTIONS=1` — skip prediction clicks
+- `SKIP_MLB=1` / `SKIP_NBA=1` / `SKIP_NHL=1` / `SKIP_NFL=1`
+- `LEAGUE=NBA` — used when running generate-predictions alone
 
 ## Schedule (Windows)
 
-Task Scheduler task `MLBPredictionBot` runs `scripts/run-daily.ps1` daily at 7:30 AM Pacific.
+Task Scheduler task `MLBPredictionBot` runs `scripts/run-daily.ps1` daily.

@@ -7,6 +7,9 @@
     "start": "node run-bot.js",
     "bot": "node run-bot.js",
     "update-mlb": "node update-mlb.js",
+    "update-nba": "node update-nba.js",
+    "update-nhl": "node update-nhl.js",
+    "update-nfl": "node update-nfl.js",
     "generate-predictions": "node generate-predictions.js"
   },
   "dependencies": {

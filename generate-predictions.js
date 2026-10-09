@@ -1,47 +1,73 @@
-import { chromium } from 'playwright';
-import { mkdirSync, writeFileSync } from 'fs';
-import { join } from 'path';
 import { pathToFileURL } from 'url';
-import { loadEnvFile, requireCredentials, todayIsoDate } from './lib/env.js';
+import { loadEnvFile, todayIsoDate } from './lib/env.js';
+import {
+  ensureLoggedIn,
+  withBrowserSession,
+} from './lib/browser.js';
 
 loadEnvFile();
 
 const BASE_URL = 'https://wordpress-production-749f.up.railway.app';
-const LOGIN_URL = `${BASE_URL}/wp-login.php`;
-const PAGE_URL = `${BASE_URL}/?league=MLB&do=1`;
-const SCREENSHOT_DIR = join(process.cwd(), 'screenshots');
 const PER_GAME_TIMEOUT_MS = Number(process.env.PER_GAME_TIMEOUT_MS ?? 600000);
+const PAGE_OPEN_ATTEMPTS = Number(process.env.PAGE_OPEN_ATTEMPTS ?? 5);
 
 function log(msg) {
   console.log(`[${new Date().toISOString()}] ${msg}`);
 }
 
-function ensureDir(dir) {
-  mkdirSync(dir, { recursive: true });
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function screenshot(page, name) {
-  ensureDir(SCREENSHOT_DIR);
-  const path = join(SCREENSHOT_DIR, `${name}.png`);
-  await page.screenshot({ path, fullPage: true });
-  log(`Screenshot saved: ${path}`);
+function normalizeLeague(league) {
+  return String(league || 'MLB').toUpperCase();
 }
 
-async function login(page, username, password) {
-  log('Logging in...');
-  await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.fill('#user_login', username);
-  await page.fill('#user_pass', password);
-  await page.click('#wp-submit');
-  await page.waitForURL(/wp-admin/, { timeout: 60000 });
-  log('Login successful.');
+function predictionPageUrl(league) {
+  return `${BASE_URL}/?league=${normalizeLeague(league)}&do=1`;
 }
 
-async function openPredictionPage(page) {
-  log(`Opening ${PAGE_URL}`);
-  await page.goto(PAGE_URL, { waitUntil: 'domcontentloaded', timeout: 180000 });
-  await page.waitForSelector('table', { timeout: 120000 });
-  await page.waitForLoadState('networkidle', { timeout: 120000 }).catch(() => {});
+async function openPredictionPage(page, league) {
+  const pageUrl = predictionPageUrl(league);
+  let lastError;
+
+  for (let attempt = 1; attempt <= PAGE_OPEN_ATTEMPTS; attempt++) {
+    try {
+      log(`Opening ${pageUrl} (attempt ${attempt}/${PAGE_OPEN_ATTEMPTS})`);
+      await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 180000 });
+
+      if (/wp-login\.php/i.test(page.url()) || (await page.locator('#user_login').count()) > 0) {
+        log('Prediction page requires login; refreshing session...');
+        await ensureLoggedIn(page);
+        await page.goto(pageUrl, { waitUntil: 'domcontentloaded', timeout: 180000 });
+      }
+
+      // Prefer NFL/MLB toggle if present
+      const leagueToggle = page.getByRole('link', { name: new RegExp(`^${normalizeLeague(league)}$`, 'i') })
+        .or(page.locator('a, button, select').filter({ hasText: new RegExp(`^\\s*${normalizeLeague(league)}\\s*$`, 'i') }));
+      if ((await leagueToggle.count()) > 0) {
+        const toggle = leagueToggle.first();
+        const tag = await toggle.evaluate((el) => el.tagName.toLowerCase()).catch(() => '');
+        if (tag === 'select') {
+          await toggle.selectOption({ label: normalizeLeague(league) }).catch(() => {});
+        } else {
+          await toggle.click().catch(() => {});
+          await page.waitForLoadState('domcontentloaded', { timeout: 60000 }).catch(() => {});
+        }
+      }
+
+      await page.waitForSelector('table', { timeout: 180000 });
+      await page.waitForLoadState('networkidle', { timeout: 180000 }).catch(() => {});
+      return;
+    } catch (err) {
+      lastError = err;
+      log(`Open prediction page attempt ${attempt} failed: ${err.message}`);
+      if (attempt < PAGE_OPEN_ATTEMPTS) {
+        await sleep(15000);
+      }
+    }
+  }
+  throw lastError ?? new Error('Failed to open prediction page.');
 }
 
 async function rowsNeedingPrediction(page, datePrefix) {
@@ -91,28 +117,22 @@ async function clickFirstGenerateForDate(page, datePrefix) {
   ]);
 
   await page.waitForLoadState('networkidle', { timeout: PER_GAME_TIMEOUT_MS }).catch(() => {});
-  await page.waitForSelector('table', { timeout: 120000 });
+  await page.waitForSelector('table', { timeout: 180000 });
   return label;
 }
 
 export async function runGeneratePredictions(options = {}) {
-  const { user, pass } = requireCredentials();
   const targetDate = options.targetDate ?? process.env.TARGET_DATE ?? todayIsoDate();
+  const league = normalizeLeague(options.league ?? process.env.LEAGUE ?? 'MLB');
 
-  ensureDir(SCREENSHOT_DIR);
-  const browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage();
-  page.setDefaultTimeout(120000);
+  return withBrowserSession(async ({ page }) => {
+    let completed = 0;
 
-  let completed = 0;
-
-  try {
-    await login(page, user, pass);
-    await openPredictionPage(page);
-    await screenshot(page, 'predictions-start');
+    await ensureLoggedIn(page);
+    await openPredictionPage(page, league);
 
     let pending = await rowsNeedingPrediction(page, targetDate);
-    log(`Found ${pending.length} games needing prediction for ${targetDate}`);
+    log(`[${league}] Found ${pending.length} games needing prediction for ${targetDate}`);
     for (const g of pending) {
       log(`  pending: ${g.time} | ${g.matchup}`);
     }
@@ -121,7 +141,7 @@ export async function runGeneratePredictions(options = {}) {
     while (true) {
       pending = await rowsNeedingPrediction(page, targetDate);
       if (pending.length === 0) {
-        log(`No more Generate Prediction buttons for ${targetDate}.`);
+        log(`[${league}] No more Generate Prediction buttons for ${targetDate}.`);
         break;
       }
 
@@ -130,10 +150,10 @@ export async function runGeneratePredictions(options = {}) {
         throw new Error('Safety stop: too many iterations.');
       }
 
-      log(`Remaining: ${pending.length}`);
+      log(`[${league}] Remaining: ${pending.length}`);
       const label = await clickFirstGenerateForDate(page, targetDate);
       completed += 1;
-      log(`Completed #${completed}: ${label}`);
+      log(`[${league}] Completed #${completed}: ${label}`);
 
       const nextBtn = page.locator('table tbody tr').filter({
         hasText: new RegExp(targetDate),
@@ -145,18 +165,9 @@ export async function runGeneratePredictions(options = {}) {
       }
     }
 
-    await screenshot(page, 'predictions-done');
-    log(`All done. Generated predictions for ${completed} game(s) on ${targetDate}.`);
+    log(`[${league}] All done. Generated predictions for ${completed} game(s) on ${targetDate}.`);
     return completed;
-  } catch (err) {
-    await screenshot(page, 'predictions-error').catch(() => {});
-    try {
-      writeFileSync(join(SCREENSHOT_DIR, 'predictions-error.html'), await page.content(), 'utf8');
-    } catch {}
-    throw err;
-  } finally {
-    await browser.close();
-  }
+  }, options);
 }
 
 const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;

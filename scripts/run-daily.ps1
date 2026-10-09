@@ -2,13 +2,35 @@ $ErrorActionPreference = 'Stop'
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 if (-not (Test-Path (Join-Path $ProjectRoot 'run-bot.js'))) {
-  # Allow calling from project root as .\scripts\run-daily.ps1
   if (Test-Path (Join-Path (Get-Location) 'run-bot.js')) {
     $ProjectRoot = (Get-Location).Path
   }
 }
 
 Set-Location $ProjectRoot
+
+$env:Path = "C:\nvm4w\nodejs;" + $env:Path
+
+$Node = 'C:\nvm4w\nodejs\node.exe'
+if (-not (Test-Path $Node)) {
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd) { $Node = $cmd.Source }
+}
+if (-not (Test-Path $Node)) {
+  throw "node.exe not found. Install Node.js or update this script path."
+}
+
+$chromeCandidates = @(
+  $env:PLAYWRIGHT_CHROME_PATH,
+  "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
+  "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
+)
+foreach ($chrome in $chromeCandidates) {
+  if ($chrome -and (Test-Path $chrome)) {
+    $env:PLAYWRIGHT_CHROME_PATH = $chrome
+    break
+  }
+}
 
 $LogDir = Join-Path $ProjectRoot 'logs'
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -23,10 +45,12 @@ function Write-Log([string]$Message) {
 }
 
 Write-Log "Starting MLB prediction bot in $ProjectRoot"
+Write-Log "Node: $Node"
+Write-Log "Chrome: $($env:PLAYWRIGHT_CHROME_PATH)"
 Write-Log "Log file: $LogFile"
 
 try {
-  & node run-bot.js 2>&1 | ForEach-Object {
+  & $Node run-bot.js 2>&1 | ForEach-Object {
     $text = "$_"
     Add-Content -Path $LogFile -Value $text
     Write-Host $text
